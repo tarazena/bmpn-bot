@@ -26,7 +26,7 @@ export = (app: Probot) => {
       }
       const root = __dirname + path.sep + "tmp";
 
-      console.log(bpmnFiles);
+      // console.log(bpmnFiles);
       try {
         const uploadedFiles = await Promise.all(
           bpmnFiles.map(async (file) => {
@@ -131,17 +131,17 @@ export = (app: Probot) => {
                 }
               );
 
-              return `\`${file.filename}\`\n${
+              return `#### ${file.filename} **${file.status}**\n${
                 file.status === "modified"
-                  ? `\`\`\`\n${file.patch}\n\`\`\``
+                  ? `\`\`\`diff\n${file.patch}\n\`\`\``
                   : ""
               }\n\nOld:\n![image](${
                 oldResponse.data.fileUrl
               })\n\nNew:\n![image](${response.data.fileUrl})`;
             }
 
-            return `\`${file.filename}\`\n${
-              file.status === "modified" ? `\`\`\`\n${file.patch}\n\`\`\`` : ""
+            return `#### ${file.filename} **${file.status}**\n${
+              file.status === "modified" ? `\`\`\`diff\n${file.patch}\n\`\`\`` : ""
             }\n\n![image](${response.data.fileUrl})`;
           })
         );
