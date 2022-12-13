@@ -1,21 +1,20 @@
 import { Probot } from "probot";
 const { convertAll } = require("bpmn-to-image");
 import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync } from "fs";
-import axios from "axios";
+import axios, { AxiosResponse } from "axios";
 import path from "path";
 
 const IMAGE_UPLOAD_KEY = process.env.IMAGE_UPLOAD_KEY;
+const root = __dirname + path.sep + "tmp";
 
 export = (app: Probot) => {
   app.on(
     ["pull_request.opened", "pull_request.synchronize"],
     async (context) => {
-      const pull_request = context.payload.pull_request;
-
       const files = await context.octokit.pulls.listFiles({
         owner: context.payload.repository.owner.login,
         repo: context.payload.repository.name,
-        pull_number: pull_request.number,
+        pull_number: context.payload.pull_request.number,
       });
       const bpmnFiles = files.data.filter((file) =>
         file.filename.endsWith(".bpmn")
@@ -24,7 +23,7 @@ export = (app: Probot) => {
       if (bpmnFiles.length === 0) {
         return;
       }
-      const root = __dirname + path.sep + "tmp";
+      
 
       // console.log(bpmnFiles);
       try {
@@ -33,11 +32,11 @@ export = (app: Probot) => {
             let oldContentSha;
             if (file.status === "modified") {
               // console.log("Got old content");
-              let oldContent = await context.octokit.repos.getContent({
+              const oldContent = await context.octokit.repos.getContent({
                 owner: context.payload.repository.owner.login,
                 repo: context.payload.repository.name,
                 path: file.filename,
-                ref: pull_request.base.sha,
+                ref: context.payload.pull_request.base.sha,
               });
               oldContentSha = (oldContent.data as any).sha as string;
             }
@@ -55,45 +54,17 @@ export = (app: Probot) => {
               ".bpmn",
               ".png"
             )}`;
+            
             mkdirSync(root, { recursive: true });
 
-            const folders = file.filename.split(path.sep).slice(0, -1);
+            checkFolders(file.filename);
 
-            if (folders.length) {
-              // create folder path if it doesn't exist
-              folders.reduce((last, folder) => {
-                const folderPath = last + path.sep + folder + path.sep;
-                // console.log("FOLDER PATH2:", folderPath);
+            await writeFile(inputFile, fileContent.data.content);
 
-                if (!existsSync(folderPath)) {
-                  mkdirSync(folderPath);
-                }
-                return folderPath;
-              }, root);
-            }
+            await convertBmpnFiles(inputFile, outputFile);
 
-            await writeFileSync(inputFile, fileContent.data.content, {
-              encoding: "base64",
-            });
 
-            await convertAll([
-              {
-                input: inputFile,
-                outputs: [outputFile],
-              },
-            ]);
-
-            const image = readFileSync(outputFile);
-            const response = await axios.post(
-              "https://api.upload.io/v2/accounts/FW25ayp/uploads/binary",
-              image,
-              {
-                headers: {
-                  "Content-Type": "image/png",
-                  Authorization: `Bearer ${IMAGE_UPLOAD_KEY}`,
-                },
-              }
-            );
+            const response = await uploadFile(outputFile);
 
             if (oldContentSha) {
               const oldFileContent = await context.octokit.git.getBlob({
@@ -102,34 +73,14 @@ export = (app: Probot) => {
                 repo: context.payload.repository.name,
               });
 
-              await writeFileSync(
+              await writeFile(inputFile, oldFileContent.data.content, true);
+
+              await convertBmpnFiles(
                 inputFile.replace(".bpmn", " old.bpmn"),
-                oldFileContent.data.content,
-                {
-                  encoding: "base64",
-                }
-              );
-
-              await convertAll([
-                {
-                  input: inputFile.replace(".bpmn", " old.bpmn"),
-                  outputs: [outputFile.replace(".bpmn", " old.bpmn")],
-                },
-              ]);
-
-              const oldImage = readFileSync(
                 outputFile.replace(".bpmn", " old.bpmn")
               );
-              const oldResponse = await axios.post(
-                "https://api.upload.io/v2/accounts/FW25ayp/uploads/binary",
-                oldImage,
-                {
-                  headers: {
-                    "Content-Type": "image/png",
-                    Authorization: `Bearer ${IMAGE_UPLOAD_KEY}`,
-                  },
-                }
-              );
+
+              const oldResponse = await uploadFile(outputFile, true);
 
               return `#### ${file.filename} **${file.status}**\n${
                 file.status === "modified"
@@ -141,7 +92,9 @@ export = (app: Probot) => {
             }
 
             return `#### ${file.filename} **${file.status}**\n${
-              file.status === "modified" ? `\`\`\`diff\n${file.patch}\n\`\`\`` : ""
+              file.status === "modified"
+                ? `\`\`\`diff\n${file.patch}\n\`\`\``
+                : ""
             }\n\n![image](${response.data.fileUrl})`;
           })
         );
@@ -152,7 +105,7 @@ export = (app: Probot) => {
           body,
           owner: context.payload.repository.owner.login,
           repo: context.payload.repository.name,
-          issue_number: pull_request.number,
+          issue_number: context.payload.pull_request.number,
         });
 
         rmSync(root, { recursive: true });
@@ -162,3 +115,63 @@ export = (app: Probot) => {
     }
   );
 };
+
+async function convertBmpnFiles(inputFile: string, outputFile: string) {
+  await convertAll([
+    {
+      input: inputFile,
+      outputs: [outputFile],
+    },
+  ]);
+}
+
+async function writeFile(
+  fileName: string,
+  content: string,
+  old: boolean = false
+) {
+  await writeFileSync(
+    old ? fileName.replace(".bpmn", " old.bpmn") : fileName,
+    content,
+    {
+      encoding: "base64",
+    }
+  );
+}
+
+async function uploadFile(
+  fileName: string,
+  old: boolean = false
+): Promise<AxiosResponse<any, any>> {
+  const file = readFileSync(
+    old ? fileName.replace(".bpmn", " old.bpmn") : fileName
+  );
+
+  return await axios.post(
+    "https://api.upload.io/v2/accounts/FW25ayp/uploads/binary",
+    file,
+    {
+      headers: {
+        "Content-Type": "image/png",
+        Authorization: `Bearer ${IMAGE_UPLOAD_KEY}`,
+      },
+    }
+  );
+}
+
+function checkFolders(fileName: string) {
+  const folders = fileName.split(path.sep).slice(0, -1);
+
+  if (folders.length) {
+    // create folder path if it doesn't exist
+    folders.reduce((last, folder) => {
+      const folderPath = last + path.sep + folder + path.sep;
+      // console.log("FOLDER PATH2:", folderPath);
+
+      if (!existsSync(folderPath)) {
+        mkdirSync(folderPath);
+      }
+      return folderPath;
+    }, root);
+  }
+}
