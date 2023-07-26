@@ -1,6 +1,8 @@
 # bmpn-bot
 
-> A GitHub App built with [Probot](https://github.com/probot/probot) that A Probot app
+A GitHub App built with [Probot](https://github.com/probot/probot) 
+
+This bot will add comments with rendered pictures of any modified `bpmn` files in the pull request.
 
 ## Setup
 
